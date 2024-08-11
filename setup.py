@@ -11,6 +11,7 @@ setup(
             name="amd_repro.lib",
             sources=[
                 "amd_repro/registry.cpp",
+                "amd_repro/virtual_memory.cpp",
                 "amd_repro/multi_gpu_barrier.hip",
             ],
             include_dirs=[
