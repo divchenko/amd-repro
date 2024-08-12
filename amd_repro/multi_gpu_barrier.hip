@@ -66,29 +66,32 @@ __global__ void multi_gpu_barrier_kernel(Params params) {
   const int tidx = threadIdx.x;
 
   // Read flag.
-  uint64_t barrier_flag = *params.barrier_flag_ptr;
+  uint64_t barrier_flag = *(params.barrier_flag_ptr + bidx);
 
   // Barrier.
   if (tidx < params.num_ranks) {
     // The 1st block notifies the other ranks.
-    if (bidx == 0) {
-      st_flag_release(barrier_flag,
-                      params.peer_barrier_ptrs[tidx] + params.rank);
-    }
+    st_flag_release(barrier_flag,
+                    params.peer_barrier_ptrs[tidx] + bidx * MAX_RANKS + params.rank);
 
     // Busy-wait until all ranks are ready.
     uint64_t rank_barrier;
-    uint64_t* peer_barrier_d = params.peer_barrier_ptrs[params.rank] + tidx;
+    uint64_t* peer_barrier_d = params.peer_barrier_ptrs[params.rank] + bidx * MAX_RANKS + tidx;
+    int i = 0;
     do {
-      ld_flag_acquire(rank_barrier, peer_barrier_d);
+        ld_flag_acquire(rank_barrier, peer_barrier_d);
+        i += 1;
+        if (i == 10000 && params.rank == 1) {
+          printf("! %d %d %d %d %d \n", params.rank, bidx, tidx, barrier_flag, rank_barrier);
+        }
     } while (rank_barrier < barrier_flag);
   }
 
   __syncthreads();
 
   // Increment flag.
-  if (bidx == 0 and tidx == 0) {
-    *params.barrier_flag_ptr = barrier_flag + 1;
+  if (tidx == 0) {
+    *(params.barrier_flag_ptr + bidx) = barrier_flag + 1;
   }
 }
 
@@ -137,17 +140,17 @@ MultiGpuBarrier::MultiGpuBarrier(int device, int rank, int num_ranks)
       {c10::kCUDA, static_cast<c10::DeviceIndex>(device)});
 
   // Allocate barrier buffer.
-  constexpr auto barrier_size = MAX_RANKS * sizeof(uint64_t);
+  constexpr auto barrier_size = NUM_BLOCKS * MAX_RANKS * sizeof(uint64_t);
   auto peer_barrier_ptr =
       reinterpret_cast<void**>(&params_.peer_barrier_ptrs[rank]);
   C10_HIP_CHECK(hipMalloc(peer_barrier_ptr, barrier_size));
   C10_HIP_CHECK(hipMemset(*peer_barrier_ptr, 0, barrier_size));
 
   // Allocate flag.
-  auto flag = at::ones(
-      {1},
+  flag_ = at::ones(
+      {NUM_BLOCKS},
       at::dtype(at::ScalarType::Long).device(at::kCUDA).device_index(device));
-  params_.barrier_flag_ptr = reinterpret_cast<uint64_t*>(flag.data_ptr());
+  params_.barrier_flag_ptr = reinterpret_cast<uint64_t*>(flag_.data_ptr());
 }
 
 MultiGpuBarrier::~MultiGpuBarrier() {
